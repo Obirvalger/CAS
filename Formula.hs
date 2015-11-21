@@ -2,13 +2,12 @@ module Formula where
 
 import Data.List(sort, sortBy, partition, groupBy)
 import Data.Ord(comparing)
---import Data.Function(id)
 
 data Formula = C Int
              | V String 
              | Add Formula Formula 
              | Mul Formula Formula 
-            -- | Exp Formula Int 
+             | Exp Formula Int 
              deriving (Eq, Ord)--, Show)
 
 instance Num Formula where
@@ -27,18 +26,23 @@ instance Num Formula where
     (==) _ _                 = False-}
 
 instance Show Formula where
-    show (C a)     = show a
-    show (V x)     = x
+    show (C a)                         = show a
+    show (Exp (V x) a)                 = x ++ "^" ++ show a
+    show (Exp f a)                     = "(" ++ show f ++ ")" ++ "^" ++ show a
+    show (V x)                         = show' x where
+        show' x = if any (=='+') x then "("++x++")" else x
+    {--show (Mul f@(Add b c) (C a))       = "(" ++ show f ++ ")" ++ "*" ++ show a
+    show (Mul f (C a))                 = show f ++ "*" ++ show a
     show (Mul f@(Add _ _) g@(Add _ _)) = "(" ++ show f ++ ")" ++ "(" ++ show g ++ ")"
-    show (Mul f@(Add _ _) g) = "(" ++ show f ++ ")" ++ show g
-    show (Mul f g@(Add _ _)) = show f ++ "(" ++ show g ++ ")"
-    show (Mul f g) = show f ++ show g
-    show (Add f g) = show f ++ " + " ++ show g
-    {-show (Add a b) = "(" ++ show a ++ ")" ++ " + " ++ "(" ++ show b  ++ ")"
-    show (Mul a b) = "(" ++ show a ++ ")" ++ " * " ++ "(" ++ show b  ++ ")"-}
+    show (Mul f@(Add _ _) g)           = "(" ++ show f ++ ")" ++ show g
+    show (Mul f g@(Add _ _))           = show f ++ "(" ++ show g ++ ")"
+    show (Mul f g)                     = show f ++ show g
+    show (Add f g)                     = show f ++ " + " ++ show g--}
+    show (Add a b) = "[" ++ show a ++ "]" ++ " + " ++ "[" ++ show b  ++ "]"
+    show (Mul a b) = "(" ++ show a ++ ")" ++ " * " ++ "(" ++ show b  ++ ")"
 
 toPolynomial :: Int -> Formula -> Formula
-toPolynomial k = applyToFormula (subst01 . evalConstants . constantsMod k) . collect . evalConstants . lassoc . dist
+toPolynomial k = applyToFormula (subst01 . evalConstants . constantsMod k) . collect . evalConstants . lassoc . expand
 
 polarize :: Formula -> [(String, Formula)] -> Formula
 polarize f ds = mapFormula (polarize' ds) f where
@@ -62,6 +66,8 @@ isMul (Mul a b) = True
 isMul _         = False
 isAdd (Add a b) = True
 isAdd _         = False
+isExp (Exp a b) = True
+isExp _         = False
 
 fromConst (C a) = a
 fromVar   (V a) = a
@@ -69,19 +75,23 @@ fromVar   (V a) = a
 commutativeAdd :: Formula -> Formula
 commutativeAdd (Add a b) = Add b a
 
+lassoc :: Formula -> Formula
+lassoc = fromList Add . map (fromList Mul) . toSumOfProduct
+
 mapFormula :: (Formula -> Formula) -> Formula -> Formula
 mapFormula f (Add a b) = f (Add (mapFormula f a) (mapFormula f b))
 mapFormula f (Mul a b) = f (Mul (mapFormula f a) (mapFormula f b))
+mapFormula f (Exp a b) = f (Exp (mapFormula f a) b)
 mapFormula f a         = f a
 
 applyToFormula :: (Formula -> Formula) -> Formula -> Formula
 applyToFormula f x | x == f x  = x
                    | otherwise = applyToFormula f (f x)
 
-mapAdd :: (Formula -> Formula) -> Formula -> Formula
+{--mapAdd :: (Formula -> Formula) -> Formula -> Formula
 mapAdd f (Add a b) = f $ Add (mapAdd f a) (mapAdd f b)
 mapAdd f (Mul a b) = Mul (mapAdd f a) (mapAdd f b)
-mapAdd f a         = a
+mapAdd f a         = a--}
 
 subst01 :: Formula -> Formula
 subst01 = applyToFormula $ mapFormula subst01' where
@@ -97,8 +107,11 @@ subst01 = applyToFormula $ mapFormula subst01' where
                              | otherwise = g
     subst01' a               = a
 
-dist :: Formula -> Formula
-dist = applyToFormula distributive
+expand :: Formula -> Formula
+expand = applyToFormula distributive . expandExp where
+    expandExp            = mapFormula expandExp'
+    expandExp' (Exp x a) = fromList Mul (replicate a x)
+    expandExp' a         = a
 
 distributive :: Formula -> Formula
 distributive = mapFormula distributive' where
@@ -107,15 +120,15 @@ distributive = mapFormula distributive' where
     distributive' (Mul a (Add b c)) = Add (Mul a b) (Mul a c)
     distributive' a                 = a
 
-lassoc :: Formula -> Formula
-lassoc = applyToFormula lassociative
+{--lassocOld :: Formula -> Formula
+lassocOld = applyToFormula lassociative
 
 lassociative :: Formula -> Formula
 lassociative = mapFormula lassociative' where
     lassociative' :: Formula -> Formula
     lassociative' (Mul a (Mul b c)) = Mul (Mul a b) c
     lassociative' (Add a (Add b c)) = Add (Add a b) c
-    lassociative' a = a
+    lassociative' a = a--}
 
 constantsMod :: Int -> Formula -> Formula
 constantsMod k = mapFormula constantsMod' where
@@ -123,34 +136,37 @@ constantsMod k = mapFormula constantsMod' where
     constantsMod' x     = x
 
 evalConstants :: Formula -> Formula
-evalConstants f@(Add a b) = evalAdd $ toList f where
+evalConstants f@(Add a b) = evalAdd $ toAddList f where
      evalAdd fs = let (cs, ls) = partition isConst (map evalConstants fs)
                     in fromList Add ([C (sum $ map fromConst cs)] ++ ls)
-evalConstants f@(Mul a b) = evalMul $ toList f where
+evalConstants f@(Mul a b) = evalMul $ toMulList f where
     evalMul fs = let (cs, ls) = partition isConst (map evalConstants fs)
                     in fromList Mul ([C (product $ map fromConst cs)] ++ ls)
 evalConstants a           = a
 
 fromList :: (Formula -> Formula -> Formula) -> [Formula] -> Formula
-fromList f (x:[])   = x
-fromList f (x:y:[]) = f x y
-fromList f (x:y:xs) = f (f x y) (fromList f xs)
+fromList = foldl1 
+
+fromAddList :: [Formula] -> Formula
+fromAddList = foldl1 Add
+fromMulList :: [Formula] -> Formula
+fromMulList = foldl1 Mul
 
 toAddList (Add a1 b1) = toAddList a1 ++ toAddList b1
 toAddList a1          = [a1]
 toMulList (Mul a1 b1) = toMulList a1 ++ toMulList b1
 toMulList a1          = [a1]
 
-toList :: Formula -> [Formula]
+{--toList :: Formula -> [Formula]
 toList f = case f of
              (Add a b) -> toAddList a ++ toAddList b
              (Mul a b) -> toMulList a ++ toMulList b
-             a         -> [a]
+             a         -> [a]--}
 
 toSumOfProduct :: Formula -> [[Formula]]
 toSumOfProduct = map toMulList . toAddList
 
-mapMul :: (Formula -> Formula) -> Formula -> Formula
+{--mapMul :: (Formula -> Formula) -> Formula -> Formula
 mapMul f (Mul a b) = f $ Mul (mapMul f a) (mapMul f b)
 mapMul f (Add a b) = Add (mapMul f a) (mapMul f b)
 mapMul f a         = a
@@ -162,6 +178,11 @@ toPNF (Mul (V a) b)     | b == 1  = V a
 toPNF (Mul (C a) (C b)) = C (a*b)
 toPNF (Mul (C a) b)     | a == 1    = toPNF b
                         | a == 0    = C 0
-                        | otherwise = Mul (C a) (toPNF b)
+                        | otherwise = Mul (C a) (toPNF b)--}
 
 (x,y,z,w,t) = (V "x", V "y", V "z", V "w", V "t")
+poly k = toPolynomial k
+poly2  = toPolynomial 2
+poly3  = toPolynomial 3
+poly5  = toPolynomial 5
+poly7  = toPolynomial 7
