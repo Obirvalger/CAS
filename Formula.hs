@@ -1,6 +1,6 @@
 module Formula where
 
-import Data.List(sort, sortBy, partition, groupBy, intercalate)
+import Data.List(sort, sortBy, partition, groupBy, intercalate, group)
 import Data.Ord(comparing)
 
 data Formula = C Int
@@ -25,14 +25,30 @@ instance Num Formula where
     (==) (Mul a b) (Mul c d) = a == c && b == d || a == d && b == c
     (==) _ _                 = False-}
 
-show' (C a)     = show a
+{--show' (C a)     = show a
 show' (Exp f a) = show' f ++ "^" ++ show a
 show' (Add a b) = show' a ++ " + " ++ show' b
 show' (Mul a b) = show' a ++ show' b
 show' (V x)     = showVar x where
-    showVar x       = if any (=='+') x then "("++x++")" else x
+    showVar x       = if any (=='+') x then "("++x++")" else x--}
+
+showVar x = if any (=='+') x then "("++x++")" else x
+
 instance Show Formula where
-    show = show' . simplify 
+    show = show' ' ' where
+        show' _ (C a)     = show a
+        show' _ (V x)     = showVar x
+        show' m (Add a b) | m == '+' || m == ' ' = showAdd
+                          | otherwise            = "(" ++ showAdd ++ ")" where
+                  showAdd = show' '+' a ++ " + " ++ show' '+' b
+        show' m (Mul a b) | m == '^'  = "(" ++ showMul ++ ")"
+                          | otherwise = showMul where
+                  showMul | isConst b = show' '*' a ++ "*" ++ show' '*' b
+                          | otherwise = show' '*' a ++ show' '*' b
+        show' m (Exp a b) | m == '^'  = "(" ++ showExp ++ ")"
+                          | otherwise = showExp where
+                  showExp = show' '^' a ++ "^" ++ show b
+
     {--show (C a)                         = show a
     show (Exp (V x) a)                 = x ++ "^" ++ show a
     show (Exp f a)                     = "(" ++ show f ++ ")" ++ "^" ++ show a
@@ -49,21 +65,27 @@ instance Show Formula where
     show (Mul a b) = "(" ++ show a ++ ")" ++ " * " ++ "(" ++ show b  ++ ")"--}
 
 toPolynomial :: Int -> Formula -> Formula
-toPolynomial k = applyToFormula (subst01 . evalConstants . constantsMod k) . collect . evalConstants . lassoc . expand
+toPolynomial k = applyToFormula (subst01 . evalConstants . constantsMod k) . collect . evalConstants . lassoc . expand . constantsMod k
 
 simplify :: Formula -> Formula
 simplify = subst01 . evalConstants . collect . lassoc .expand
 
-polarize :: Formula -> [(String, Formula)] -> Formula
-polarize f ds = mapFormula (polarize' ds) f where
+polarize :: [(String, Formula)] -> Formula -> Formula
+polarize ds f = mapFormula (polarize' ds) f where
     polarize' :: [(String, Formula)] -> Formula -> Formula
     polarize' ds vx@(V x) = case lookup x ds of
-                              Just g  -> Add (V $ (show' $ subst01 $ vx + g)) (-g)
+                              Just g  -> Add (V $ (show $ subst01 $ vx + g)) (-g)
                               Nothing -> vx
     polarize' ds a        = a
 
 collect :: Formula -> Formula
-collect = fromList Add . map pairs . groupBy snds . sortBy (comparing snd) . map (norm . partition isConst) . toSumOfProduct where
+collect = fromAddList . map (fromMulList .exps) . toSumOfProduct . collect' where
+    exps       = map makeExp . group . sort
+    makeExp xs | length xs == 1 = head xs
+               | otherwise      = Exp (head xs) (length xs)
+
+collect' :: Formula -> Formula
+collect' = fromAddList . map pairs . groupBy snds . sortBy (comparing snd) . map (norm . partition isConst) . toSumOfProduct where
     norm (a,b) = (product a, sort b)
     snds a b   = snd a == snd b
     pairs l    = subst01 $ evalConstants $ fromList Mul ((sum $ map fst l):(snd $ head l))
@@ -142,8 +164,9 @@ lassociative = mapFormula lassociative' where
 
 constantsMod :: Int -> Formula -> Formula
 constantsMod k = mapFormula constantsMod' where
-    constantsMod' (C a) = C (a `mod` k)
-    constantsMod' x     = x
+    constantsMod' (C a)     = C (a `mod` k)
+    constantsMod' (Exp x a) = (Exp x (a `mod` k))
+    constantsMod' x         = x
 
 evalConstants :: Formula -> Formula
 evalConstants f@(Add a b) = evalAdd $ toAddList f where
@@ -194,11 +217,13 @@ pprint = putStrLn . pprint'
 
 pprint' :: Formula -> String
 pprint' (C a) = show a
-pprint' (V x) = showVar x where
-    showVar x = if any (=='+') x then "("++x++")" else x
+pprint' (V x) = showVar x
 pprint' f@(Add a b) = "[" ++ intercalate "+" (map pprint' $ toAddList f)  ++ "]"
 pprint' f@(Mul a b) = "(" ++ intercalate "*" (map pprint' $ toMulList f)  ++ ")"
 pprint' (Exp x a)   = "{" ++ pprint' x ++ "}" ++ "^" ++ show a
+
+j i x = 1-(Exp (x-i) (-1))
+(j0,j1,j2,j3,j4,j5,j6) = (j 0, j 1, j 2, j 3, j 4, j 5, j 6)
 
 (x,y,z,w,t) = (V "x", V "y", V "z", V "w", V "t")
 poly k = toPolynomial k
